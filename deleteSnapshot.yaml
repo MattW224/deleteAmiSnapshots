@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Resources:
+  lambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+  lambdaPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              - "ec2:DescribeSnapshots"
+              - "ec2:DeleteSnapshot"
+            Resource: "*"
+      PolicyName: !Ref "AWS::StackName"
+      Roles:
+        - !Ref lambdaRole
+  lambdaEvent:
+    Type: "AWS::Events::Rule"
+    Properties:
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - ec2.amazonaws.com
+          eventName:
+            - DeregisterImage
+      Targets:
+        - Arn: !GetAtt lambdaFunction.Arn
+          Id: !Ref "AWS::StackName"
+  invokeLambdaPermissions:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName:
+        Ref: "lambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "lambdaEvent"
+          - "Arn"
+  lambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        ZipFile: >
+          'use strict';
+          var AWS = require('aws-sdk');
+
+          exports.handler = (event, context, callback) => {
+            var EC2 = new AWS.EC2({region: event.detail.awsRegion}),
+                ami_id = event.detail.requestParameters.imageId,
+                searchParams = {Filters: [{'Name': 'description', 'Values': ['Created by CreateImage(i-*) for ' + ami_id + ' from vol-*']}]};
+
+            EC2.describeSnapshots(searchParams).promise().then((data) => {
+              Promise.all(data.Snapshots.map((snapshot) => {
+                var deleteParams = {SnapshotId: snapshot.SnapshotId};
+                console.log('Deleting ' + snapshot.SnapshotId + ' pertaining to ' + ami_id);
+                return EC2.deleteSnapshot(deleteParams).promise();
+              })).then(() => {
+                context.done();  
+              });
+            });
+          };
+      Description: "Delete backing snapshots when AMI is deregistered."
+      Handler: index.handler
+      Role: !GetAtt lambdaRole.Arn
+      Runtime: nodejs4.3
+      Timeout: 10
