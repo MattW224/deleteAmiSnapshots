@@ -46,14 +46,10 @@ Resources:
   invokeLambdaPermissions:
     Type: "AWS::Lambda::Permission"
     Properties:
-      FunctionName:
-        Ref: "lambdaFunction"
+      FunctionName: !Ref lambdaFunction
       Action: "lambda:InvokeFunction"
       Principal: "events.amazonaws.com"
-      SourceArn:
-        Fn::GetAtt:
-          - "lambdaEvent"
-          - "Arn"
+      SourceArn: !GetAtt lambdaEvent.Arn
   lambdaFunction:
     Type: "AWS::Lambda::Function"
     Properties:
@@ -62,23 +58,28 @@ Resources:
           'use strict';
           var AWS = require('aws-sdk');
 
-          exports.handler = (event, context, callback) => {
-            var EC2 = new AWS.EC2({region: event.detail.awsRegion}),
-                ami_id = event.detail.requestParameters.imageId,
-                searchParams = {Filters: [{'Name': 'description', 'Values': ['Created by CreateImage(i-*) for ' + ami_id + ' from vol-*']}]};
-
-            EC2.describeSnapshots(searchParams).promise().then((data) => {
-              Promise.all(data.Snapshots.map((snapshot) => {
-                var deleteParams = {SnapshotId: snapshot.SnapshotId};
-                console.log('Deleting ' + snapshot.SnapshotId + ' pertaining to ' + ami_id);
-                return EC2.deleteSnapshot(deleteParams).promise();
-              })).then(() => {
-                context.done();  
+          exports.handler = (event) => {
+              var EC2 = new AWS.EC2({region: event.detail.awsRegion}),
+                  ami_id = event.detail.requestParameters.imageId,
+                  searchParams = {
+                    Filters: [
+                      {
+                        'Name': 'description',
+                        'Values': ['Created by CreateImage(i-*) for ' + ami_id + ' from vol-*']
+                      }
+                    ]
+                  };
+                  
+              EC2.describeSnapshots(searchParams).promise().then((data) => {
+                  Promise.all(data.Snapshots.map((snapshot) => {
+                      var deleteParams = {SnapshotId: snapshot.SnapshotId};
+                      console.log('Deleting ' + snapshot.SnapshotId + ' pertaining to ' + ami_id);
+                      return EC2.deleteSnapshot(deleteParams).promise();
+                  }));
               });
-            });
           };
       Description: "Delete backing snapshots when AMI is deregistered."
       Handler: index.handler
       Role: !GetAtt lambdaRole.Arn
-      Runtime: nodejs4.3
+      Runtime: nodejs10.x
       Timeout: 10
